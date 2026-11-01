@@ -14,6 +14,8 @@ Helps to read through boring texts by adding current reading position, highlight
 1. Press "Enable for this domain" in the Tampermonkey menu.
 2. Middle-click the last word you read to add a line below.
 3. Select text to highlight it or add a comment.
+4. ...
+5. If you forgot where you were, press "Open library" in the Tampermonkey menu.
 
 ## Notes
 

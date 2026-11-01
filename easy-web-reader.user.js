@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EasyWebReader
 // @namespace    easy-web-reader
-// @version      1.1.0
+// @version      1.1.1
 // @description  Reading aid for long texts: a "continue here" bookmark line, highlights, margin comments and a library of everything you've read. Off by default, enable per site from the userscript menu.
 // @license      MIT
 // @match        *://*/*
@@ -237,6 +237,16 @@
   const isEditable = (el) => !!(el && el.closest && (el.closest('input, textarea, select') || el.isContentEditable));
   const elementOf = (n) => (n.nodeType === 1 ? n : n.parentElement);
 
+  // True when something else (a modal, a sticky header, a page's own popup) is painted over the
+  // anchored text, so our overlay must not be drawn on top of it. Off-screen text counts as visible.
+  function occluded(rect, block) {
+    const y = rect.top + rect.height / 2;
+    const x = rect.left + Math.min(rect.width / 2, 12);
+    if (y < 0 || y >= window.innerHeight || x < 0 || x >= window.innerWidth) return false;
+    const top = document.elementsFromPoint(x, y).find((el) => !inUI(el));
+    return !!top && !block.contains(top) && !top.contains(block);
+  }
+
   function blockOf(node) {
     for (let el = elementOf(node); el && el !== document.body; el = el.parentElement) {
       const d = getComputedStyle(el).display;
@@ -350,7 +360,8 @@
   function layoutBookmark() {
     if (!bmEl) return;
     const rects = visibleRects(bmRange);
-    if (!rects.length) { bmEl.style.display = 'none'; return; }
+    const block = rects.length && blockOf(bmRange.startContainer);
+    if (!rects.length || occluded(rects[0], block)) { bmEl.style.display = 'none'; return; }
     bmEl.style.display = '';
     // Draw under the text line of the anchor's first rect, centered in the gap before the next line.
     const rc = rects[0];
@@ -358,7 +369,6 @@
     const ts = getComputedStyle(textEl);
     const lh = parseFloat(ts.lineHeight) || parseFloat(ts.fontSize) * 1.2;
     const y = rc.bottom + Math.max(1, (lh - rc.height) / 2);
-    const block = blockOf(bmRange.startContainer);
     const b = block.getBoundingClientRect(), bs = getComputedStyle(block);
     const left = b.left + parseFloat(bs.paddingLeft) - 8;
     const right = b.right - parseFloat(bs.paddingRight) + 8;
@@ -597,9 +607,10 @@
       if (it.id !== editingId) el.firstChild.textContent = it.comment || '';
       const range = rangeOf(it.id);
       const rects = visibleRects(range);
-      if (!rects.length) { el.style.display = 'none'; continue; }
+      const block = rects.length && blockOf(range.startContainer);
+      if (!rects.length || (it.id !== editingId && occluded(rects[0], block))) { el.style.display = 'none'; continue; }
       el.style.display = '';
-      right = Math.max(right, blockOf(range.startContainer).getBoundingClientRect().right);
+      right = Math.max(right, block.getBoundingClientRect().right);
       entries.push({ id: it.id, el, ideal: rects[0].top - o.top });
     }
     if (!entries.length) return;
@@ -1411,14 +1422,16 @@
     on(document, 'mousemove', onMouseMove, { passive: true });
     on(document, 'keydown', (e) => { if (e.key === 'Escape') hideBubble(); });
     on(window, 'resize', scheduleLayout);
-    // Window scrolling moves the layer with the page; inner scroll containers need repositioning.
-    on(document, 'scroll', (e) => { if (e.target !== document) scheduleLayout(); }, { capture: true, passive: true });
+    // Window scrolling moves the layer with the page, but can slide the text under a sticky header;
+    // inner scroll containers need repositioning too.
+    on(document, 'scroll', scheduleLayout, { capture: true, passive: true });
     document.fonts?.ready.then(scheduleLayout);
 
     const ro = new ResizeObserver(scheduleLayout);
     ro.observe(document.body);
     // Page text changed (dynamic content): rebuild index and re-anchor, at most about once a second.
     const mo = new MutationObserver(() => {
+      scheduleLayout(); // re-check occlusion right away (a modal just opened or closed)
       if (mutationTimer) return;
       mutationTimer = setTimeout(() => {
         mutationTimer = 0;
